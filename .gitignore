@@ -1,0 +1,4 @@
+**/target
+**/*.lock
+*.zip
+storagerefresh-magisk-module/system/bin/storagerefresh-rust

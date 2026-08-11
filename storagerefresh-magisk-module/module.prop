@@ -1,0 +1,6 @@
+id=storagerefresh_rust
+name=StorageRefresh-Rust
+version=v0.1.0
+versionCode=1
+author=Google Jules
+description=Independent open-source periodic storage maintenance (TRIM) module. Inspired by the general concept of background storage maintenance features; not affiliated with or identical to any OEM's proprietary implementation.

@@ -1,0 +1,19 @@
+[schedule]
+min_interval_hours = 24
+poll_interval_minutes = 20
+
+[battery]
+require_charging = true
+min_capacity_percent = 30
+max_temperature_c = 40.0
+
+[screen]
+min_idle_minutes = 10
+
+[storage]
+min_trim_len_mb = 4
+allowed_fs = ["ext4", "f2fs"]
+
+[safety]
+require_foreground_check = true
+dry_run = false
