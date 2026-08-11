@@ -8,8 +8,22 @@ if [ -z "$ANDROID_NDK_HOME" ] && [ -z "$ANDROID_NDK_ROOT" ]; then
 else
     NDK_PATH="${ANDROID_NDK_HOME:-$ANDROID_NDK_ROOT}"
     LINKER_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang"
+    if [ ! -f "$LINKER_PATH" ]; then
+        BIN_DIR="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
+        if [ -d "$BIN_DIR" ]; then
+            FALLBACK="$(ls "$BIN_DIR"/aarch64-linux-android*-clang 2>/dev/null | head -n 1)"
+            if [ -n "$FALLBACK" ] && [ -f "$FALLBACK" ]; then
+                echo "API 34 clang not found, falling back to: $FALLBACK"
+                LINKER_PATH="$FALLBACK"
+            fi
+        fi
+    fi
+
     if [ -f "$LINKER_PATH" ]; then
+        echo "Using Android NDK linker: $LINKER_PATH"
         export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$LINKER_PATH"
+    else
+        echo "WARNING: Could not find aarch64-linux-android-clang in NDK. Falling back to default configuration."
     fi
 fi
 
@@ -40,6 +54,7 @@ if [ -f "$SRC_PATH" ]; then
     STAGING_DIR="$SCRIPT_DIR/staging_zip"
     rm -rf "$STAGING_DIR"
     mkdir -p "$STAGING_DIR"
+    mkdir -p "$STAGING_DIR/system/bin"
 
     # Copy from our magisk module structure
     cp -R storagerefresh-magisk-module/* "$STAGING_DIR/"
