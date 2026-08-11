@@ -43,12 +43,13 @@ dry_run = false
 ```
 
 ## Logs
-Logs are kept at `/data/adb/storagerefresh/logs`. They rotate daily and only the last 7 files are kept.
+Logs are kept at `/data/local/tmp/StorageRefresh`. They rotate daily and only the last 7 files are kept.
 State file is located at `/data/adb/storagerefresh/state.json`.
 
 ## Uninstallation
 Disable or remove the module from your Root Manager.
-If you want to clear your logs/config completely, you can create a file:
+During uninstallation, the log directory `/data/local/tmp/StorageRefresh` is automatically deleted.
+If you want to clear your config and state files completely, you can create a file:
 `touch /data/adb/storagerefresh/remove_on_uninstall` before uninstalling.
 
 ## License
