@@ -34,7 +34,7 @@ struct Args {
     #[arg(long, help = "State file path", default_value = "/data/adb/storagerefresh/state.json")]
     state: String,
 
-    #[arg(long, help = "Log directory path", default_value = "/data/adb/storagerefresh/logs")]
+    #[arg(long, help = "Log directory path", default_value = "/data/local/tmp/StorageRefresh")]
     log_dir: String,
 }
 

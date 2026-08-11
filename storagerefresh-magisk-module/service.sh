@@ -16,4 +16,4 @@ if [ ! -f "$DATADIR/config.toml" ]; then
 fi
 
 # Launch daemon in background
-"$MODDIR/system/bin/storagerefresh-rust" --config "$DATADIR/config.toml" --state "$DATADIR/state.json" --log-dir "$DATADIR/logs" >/dev/null 2>&1 &
+"$MODDIR/system/bin/storagerefresh-rust" --config "$DATADIR/config.toml" --state "$DATADIR/state.json" --log-dir "/data/local/tmp/StorageRefresh" >/dev/null 2>&1 &
