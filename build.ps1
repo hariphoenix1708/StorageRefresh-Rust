@@ -41,6 +41,7 @@ if ([string]::IsNullOrWhiteSpace($ndkPath)) {
 
 Set-Location -Path "storagerefresh-rust\daemon"
 cargo build --release --target aarch64-linux-android
+if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
 
 Write-Host "Preparing module staging directory..."
 Set-Location -Path $ScriptDir
@@ -73,17 +74,19 @@ if (Test-Path $srcPath) {
 
         Copy-Item -Path $srcPath -Destination (Join-Path $StagingDir "system\bin\storagerefresh-rust") -Force
 
-        $StripPath = Join-Path $ndkPath "toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-strip.exe"
-        if (Test-Path $StripPath) {
-            Write-Host "Stripping binary..."
-            & $StripPath --strip-all (Join-Path $StagingDir "system\bin\storagerefresh-rust")
+        if (-not [string]::IsNullOrWhiteSpace($ndkPath)) {
+            $StripPath = Join-Path $ndkPath "toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-strip.exe"
+            if (Test-Path $StripPath) {
+                Write-Host "Stripping binary..."
+                & $StripPath --strip-all (Join-Path $StagingDir "system\bin\storagerefresh-rust")
+            }
         }
 
         Test-AndroidArm64Elf (Join-Path $StagingDir "system\bin\storagerefresh-rust")
 
         Write-Host "Enforcing LF line endings for Android shell scripts..."
         $TextFiles = Get-ChildItem -Path $StagingDir -Recurse -File | Where-Object {
-            $_.Extension -in @(".sh", ".prop", ".conf", ".md", ".rule", ".html", ".css", ".js") -or $_.Name -in @("update-binary")
+            $_.Extension -in @(".sh", ".prop", ".conf", ".default", ".toml", ".md", ".rule", ".html", ".css", ".js") -or $_.Name -in @("update-binary")
         }
         foreach ($file in $TextFiles) {
             $text = [System.IO.File]::ReadAllText($file.FullName)
@@ -103,17 +106,20 @@ if (Test-Path $srcPath) {
 
         $sevenZip = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
         if ([string]::IsNullOrWhiteSpace($sevenZip)) {
-            $candidate = Join-Path $env:ProgramFiles "7-Zip\7z.exe"
-            if (Test-Path $candidate) { $sevenZip = $candidate }
+            $pf = $env:ProgramFiles
+            if (-not [string]::IsNullOrWhiteSpace($pf)) {
+                $candidate = Join-Path $pf "7-Zip\7z.exe"
+                if (Test-Path $candidate) { $sevenZip = $candidate }
+            }
         }
         if ([string]::IsNullOrWhiteSpace($sevenZip)) {
             Write-Host "7-Zip not found, falling back to Compress-Archive"
             Set-Location -Path $StagingDir
-            Compress-Archive -Path ".\*" -DestinationPath (Join-Path $ScriptDir "StorageRefresh-Rust.zip") -Force
+            Compress-Archive -Path "*" -DestinationPath (Join-Path $ScriptDir "StorageRefresh-Rust.zip") -Force
         } else {
             Write-Host "Using 7-Zip for zip creation: $sevenZip"
             Set-Location -Path $StagingDir
-            & $sevenZip a -tzip (Join-Path $ScriptDir "StorageRefresh-Rust.zip") ".\*" | Out-Host
+            & $sevenZip a -tzip (Join-Path $ScriptDir "StorageRefresh-Rust.zip") "*" | Out-Host
             if ($LASTEXITCODE -ne 0) { throw "7-Zip failed with exit code $LASTEXITCODE" }
         }
 

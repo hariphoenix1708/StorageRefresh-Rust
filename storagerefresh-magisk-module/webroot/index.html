@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>StorageRefresh-Rust</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --border: #334155;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #22c55e;
+    --warn: #f59e0b;
+    --bad: #ef4444;
+    --info: #38bdf8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 16px;
+    padding-bottom: 40px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; font-size: 14px; }
+  .row .k { color: var(--muted); }
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .badge.ok { background: rgba(34,197,94,.15); color: var(--accent); }
+  .badge.bad { background: rgba(239,68,68,.15); color: var(--bad); }
+  .badge.info { background: rgba(56,189,248,.15); color: var(--info); }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+  .dot.on { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .dot.off { background: var(--bad); }
+  .actions { display: flex; gap: 10px; margin-bottom: 16px; }
+  button {
+    flex: 1;
+    background: var(--accent);
+    border: none;
+    color: #052e16;
+    font-weight: 700;
+    padding: 12px;
+    border-radius: 12px;
+    font-size: 15px;
+    cursor: pointer;
+  }
+  button.secondary { background: var(--card); color: var(--text); border: 1px solid var(--border); }
+  button:disabled { opacity: .6; }
+  pre {
+    background: #0b1220;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 300px;
+    overflow-y: auto;
+    margin: 0;
+    color: #a5f3fc;
+  }
+  .error { color: var(--bad); font-size: 13px; padding: 8px 0; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  @media (max-width: 420px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <h1>StorageRefresh-Rust</h1>
+  <div class="subtitle">Periodic storage maintenance (TRIM) control</div>
+
+  <div class="actions">
+    <button id="runBtn" onclick="runNow()">Run now</button>
+    <button class="secondary" onclick="refreshAll()">Refresh</button>
+  </div>
+
+  <div class="card">
+    <h2>Daemon</h2>
+    <div class="row"><span class="k">Status</span><span id="daemonStatus">…</span></div>
+    <div class="row"><span class="k">PID</span><span id="daemonPid">—</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Conditions</h2>
+    <div id="conditions" class="grid"></div>
+  </div>
+
+  <div class="card">
+    <h2>Last run</h2>
+    <div id="lastRun"></div>
+  </div>
+
+  <div class="card">
+    <h2>Environment</h2>
+    <div id="environment"></div>
+  </div>
+
+  <div class="card">
+    <h2>Logs</h2>
+    <pre id="logs">Loading…</pre>
+  </div>
+
+  <div class="error" id="err" style="display:none"></div>
+
+<script>
+"use strict";
+
+let cbCounter = 0;
+
+// Minimal reimplementation of the `kernelsu` npm library API (window.ksu),
+// so the WebUI works without a bundler.
+function ksuExec(command) {
+  return new Promise((resolve) => {
+    const name = "cb_" + Date.now() + "_" + (cbCounter++);
+    window[name] = (errno, stdout, stderr) => {
+      delete window[name];
+      resolve({ errno: errno, stdout: stdout || "", stderr: stderr || "" });
+    };
+    try {
+      if (window.ksu && typeof window.ksu.exec === "function") {
+        window.ksu.exec(command, "{}", name);
+      } else {
+        throw new Error("ksu API unavailable");
+      }
+    } catch (e) {
+      delete window[name];
+      resolve({ errno: -1, stdout: "", stderr: String(e) });
+    }
+  });
+}
+
+function toast(msg) {
+  try { window.ksu.toast(msg); } catch (e) {}
+}
+
+const MODID = "storagerefresh_rust";
+const MODDIR = "/data/adb/modules/" + MODID;
+const DATADIR = "/data/adb/storagerefresh";
+const LOGDIR = "/data/local/tmp/StorageRefresh";
+const BIN = MODDIR + "/system/bin/storagerefresh-rust";
+
+function setText(id, text) {
+  document.getElementById(id).textContent = text;
+}
+
+function setHtml(id, html) {
+  document.getElementById(id).innerHTML = html;
+}
+
+function fmtTs(ts) {
+  if (!ts) return "—";
+  return new Date(ts * 1000).toLocaleString();
+}
+
+function badge(ok, okText, badText) {
+  return '<span class="badge ' + (ok ? "ok" : "bad") + '">' + (ok ? okText : badText) + "</span>";
+}
+
+async function loadStatus() {
+  const res = await ksuExec(BIN + ' --status --config "' + DATADIR + '/config.toml" --state "' + DATADIR + '/state.json"');
+  if (res.errno !== 0) {
+    setText("daemonStatus", "Unknown");
+    setText("daemonPid", "—");
+    showError(res.stderr || res.stdout || "failed to read status (errno " + res.errno + ")");
+    return;
+  }
+  let data;
+  try { data = JSON.parse(res.stdout); } catch (e) { showError("status JSON parse failed: " + res.stdout.slice(0, 200)); return; }
+
+  // Daemon process info
+  const running = data.running;
+  setHtml("daemonStatus", running ? '<span class="dot on"></span>' + badge(true, "Running") : '<span class="dot off"></span>' + badge(false, "Stopped"));
+  setText("daemonPid", data.pid ? data.pid : "—");
+
+  // Conditions
+  const c = data.conditions || {};
+  const conds = document.getElementById("conditions");
+  conds.innerHTML = "";
+  const items = [
+    ["Battery", c.battery_ok, "OK", "Not OK"],
+    ["Screen idle", c.screen_ok, "OK", "Not OK"],
+    ["Deep idle", c.idle_ok, "OK", "Not OK"],
+    ["Foreground", c.foreground_ok, "OK", "Blocked"],
+  ];
+  for (const [label, ok, okT, badT] of items) {
+    const div = document.createElement("div");
+    div.className = "row";
+    div.innerHTML = '<span class="k">' + label + '</span>' + badge(ok, okT, badT);
+    conds.appendChild(div);
+  }
+  const met = document.createElement("div");
+  met.className = "row";
+  met.innerHTML = '<span class="k">Overall</span>' + badge(c.all_met, "Ready", "Not ready");
+  conds.appendChild(met);
+
+  // Last run
+  const s = data.state || {};
+  const resultBadge =
+    s.last_run_result === "success" ? badge(true, "Success") :
+    s.last_run_result === "never_run" ? badge(false, "Never run") :
+    s.last_run_result && s.last_run_result.startsWith("skipped") ? badge(false, "Skipped") :
+    badge(false, "Failed");
+  document.getElementById("lastRun").innerHTML =
+    '<div class="row"><span class="k">Result</span>' + resultBadge + "</div>" +
+    '<div class="row"><span class="k">Time</span><span>' + fmtTs(s.last_run_timestamp) + "</span></div>" +
+    '<div class="row"><span class="k">Trimmed</span><span>' + (s.last_trimmed_bytes || 0) + " bytes</span></div>" +
+    '<div class="row"><span class="k">Run count</span><span>' + (s.run_count || 0) + "</span></div>" +
+    '<div class="row"><span class="k">Screen off since</span><span>' + fmtTs(s.screen_off_since) + "</span></div>";
+
+  // Environment
+  const e = data.environment || {};
+  document.getElementById("environment").innerHTML =
+    '<div class="row"><span class="k">Android</span><span>' + (e.android_version || "—") + " (SDK " + (e.android_sdk || "?") + ")</span></div>" +
+    '<div class="row"><span class="k">HyperOS</span><span>' + (e.is_hyperos ? "Yes" : "No") + "</span></div>" +
+    '<div class="row"><span class="k">Root</span><span>' + (e.root_type || "Unknown") + "</span></div>";
+}
+
+async function loadLogs() {
+  const res = await ksuExec("tail -n 40 \"$(ls -t " + LOGDIR + "/storagerefresh-*.log 2>/dev/null | head -1)\"");
+  setText("logs", res.errno === 0 && res.stdout ? res.stdout : "(no logs yet)");
+}
+
+function showError(msg) {
+  const el = document.getElementById("err");
+  el.style.display = "block";
+  el.textContent = msg;
+}
+
+async function runNow() {
+  const btn = document.getElementById("runBtn");
+  btn.disabled = true;
+  btn.textContent = "Running…";
+  showError("");
+  const res = await ksuExec("sh " + MODDIR + "/action.sh");
+  btn.disabled = false;
+  btn.textContent = "Run now";
+  toast(res.errno === 0 ? "Maintenance finished" : "Maintenance failed (exit " + res.errno + ")");
+  await refreshAll();
+}
+
+async function refreshAll() {
+  showError("");
+  await Promise.all([loadStatus(), loadLogs()]);
+}
+
+window.addEventListener("load", refreshAll);
+</script>
+</body>
+</html>

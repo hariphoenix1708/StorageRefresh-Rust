@@ -6,6 +6,7 @@ poll_interval_minutes = 20
 require_charging = true
 min_capacity_percent = 30
 max_temperature_c = 40.0
+charging_override_capacity = 80
 
 [screen]
 min_idle_minutes = 10
@@ -13,7 +14,9 @@ min_idle_minutes = 10
 [storage]
 min_trim_len_mb = 4
 allowed_fs = ["ext4", "f2fs"]
+mount_point = "/data"
 
 [safety]
 require_foreground_check = true
 dry_run = false
+foreground_denylist = ["game", "camera", "video", "youtube", "netflix"]

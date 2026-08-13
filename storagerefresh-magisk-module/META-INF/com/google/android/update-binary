@@ -1,19 +1,43 @@
 #!/sbin/sh
+# Magisk installer. KernelSU ignores META-INF and uses customize.sh instead.
+# This script defines MODPATH itself rather than relying on the environment.
 OUTFD=$2
 ZIPFILE=$3
+MODPATH="/data/adb/modules/storagerefresh_rust"
+TMPDIR="/tmp/storagerefresh_install"
 
 ui_print() {
   echo -e "ui_print $1\nui_print" >&$OUTFD
 }
 
 ui_print "- Installing StorageRefresh-Rust"
-unzip -o "$ZIPFILE" -d /tmp/storagerefresh_install
-cp -rf /tmp/storagerefresh_install/* $MODPATH/
-rm -rf /tmp/storagerefresh_install
 
-set_perm_recursive $MODPATH 0 0 0755 0644
-set_perm $MODPATH/service.sh 0 0 0755
-set_perm $MODPATH/uninstall.sh 0 0 0755
-set_perm $MODPATH/system/bin/storagerefresh-rust 0 0 0755
+# Fallbacks in case the Magisk-provided helpers are unavailable.
+command -v set_perm_recursive >/dev/null 2>&1 || set_perm_recursive() {
+  chmod -R "$4" "$1" 2>/dev/null
+  chmod "$3" "$1"
+}
+command -v set_perm >/dev/null 2>&1 || set_perm() {
+  chown "$2:$3" "$1" 2>/dev/null
+  chmod "$4" "$1"
+}
+
+rm -rf "$TMPDIR"
+mkdir -p "$TMPDIR" "$MODPATH"
+unzip -o "$ZIPFILE" -d "$TMPDIR" >&2 || {
+  ui_print "! Failed to extract module"
+  exit 1
+}
+cp -rf "$TMPDIR"/* "$MODPATH/" 2>/dev/null || cp -rf "$TMPDIR/." "$MODPATH/"
+rm -rf "$TMPDIR"
+
+# Permissions: root:root, dirs 0755, files 0644, binaries/scripts 0755.
+set_perm_recursive "$MODPATH" 0 0 0755 0644
+set_perm "$MODPATH/service.sh" 0 0 0755
+set_perm "$MODPATH/uninstall.sh" 0 0 0755
+set_perm "$MODPATH/action.sh" 0 0 0755
+set_perm "$MODPATH/system/bin/storagerefresh-rust" 0 0 0755
+set_perm "$MODPATH/customize.sh" 0 0 0755
 
 ui_print "- Done"
+exit 0

@@ -7,10 +7,11 @@ mod scheduler;
 mod state;
 mod storage;
 
-use clap::Parser;
 use chrono::Utc;
+use clap::Parser;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Parser, Debug)]
@@ -19,23 +20,65 @@ struct Args {
     #[arg(long, help = "Detect environment only and exit")]
     detect_only: bool,
 
-    #[arg(long, help = "Check conditions and print pass/fail")]
+    #[arg(long, help = "Print current conditions and exit")]
     check_conditions: bool,
 
-    #[arg(long, help = "Run once and exit")]
+    #[arg(
+        long,
+        help = "Print a full status snapshot (state + conditions) and exit"
+    )]
+    status: bool,
+
+    #[arg(long, help = "Run one maintenance cycle and exit")]
     once: bool,
 
     #[arg(long, help = "Dry run mode (overrides config)")]
     dry_run: bool,
 
-    #[arg(long, help = "Config file path", default_value = "/data/adb/storagerefresh/config.toml")]
+    #[arg(
+        long,
+        help = "Config file path",
+        default_value = "/data/adb/storagerefresh/config.toml"
+    )]
     config: String,
 
-    #[arg(long, help = "State file path", default_value = "/data/adb/storagerefresh/state.json")]
+    #[arg(
+        long,
+        help = "State file path",
+        default_value = "/data/adb/storagerefresh/state.json"
+    )]
     state: String,
 
-    #[arg(long, help = "Log directory path", default_value = "/data/local/tmp/StorageRefresh")]
+    #[arg(
+        long,
+        help = "Log directory path",
+        default_value = "/data/local/tmp/StorageRefresh"
+    )]
     log_dir: String,
+
+    #[arg(
+        long,
+        help = "PID file path",
+        default_value = "/data/adb/storagerefresh/daemon.pid"
+    )]
+    pidfile: String,
+}
+
+/// Shared shutdown flag, set by both SIGINT (Ctrl-C) and SIGTERM.
+static RUNNING: AtomicBool = AtomicBool::new(true);
+
+extern "C" fn handle_signal(_: libc::c_int) {
+    RUNNING.store(false, Ordering::SeqCst);
+}
+
+fn install_signal_handlers() {
+    // SAFETY: the handler only stores to an AtomicBool, which is
+    // async-signal-safe.
+    unsafe {
+        let handler = handle_signal as *const () as libc::sighandler_t;
+        libc::signal(libc::SIGINT, handler);
+        libc::signal(libc::SIGTERM, handler);
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -46,10 +89,10 @@ fn main() -> anyhow::Result<()> {
         let storage = storage::detect_storage();
 
         println!("Environment:");
-        println!("{}", serde_json::to_string_pretty(&env).unwrap());
+        println!("{}", serde_json::to_string_pretty(&env)?);
 
         println!("Storage:");
-        println!("{}", serde_json::to_string_pretty(&storage).unwrap());
+        println!("{}", serde_json::to_string_pretty(&storage)?);
         return Ok(());
     }
 
@@ -61,14 +104,13 @@ fn main() -> anyhow::Result<()> {
     }
 
     if args.check_conditions {
-        let result = conditions::check_all_conditions(
-            config.battery.min_capacity_percent,
-            config.battery.require_charging,
-            config.battery.max_temperature_c,
-            config.screen.min_idle_minutes,
-            config.safety.require_foreground_check,
-        );
-        println!("{}", serde_json::to_string_pretty(&result).unwrap());
+        let result = conditions::check_all_conditions(&config, &state);
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+
+    if args.status {
+        print_status(&config, &state)?;
         return Ok(());
     }
 
@@ -77,28 +119,28 @@ fn main() -> anyhow::Result<()> {
     if args.once {
         log::info!("Running in --once mode");
         run_cycle(&config, &mut state, &args.state, args.dry_run)?;
+        print_status(&config, &state)?;
         return Ok(());
     }
 
-    log::info!("Starting daemon with poll interval {} minutes", config.schedule.poll_interval_minutes);
+    // Daemon mode
+    install_signal_handlers();
+    write_pidfile(&args.pidfile)?;
+    log::info!(
+        "Starting daemon with poll interval {} minutes",
+        config.schedule.poll_interval_minutes
+    );
 
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-
-    ctrlc::set_handler(move || {
-        log::info!("Received exit signal, shutting down safely...");
-        r.store(false, Ordering::SeqCst);
-    }).expect("Error setting Ctrl-C handler");
-
-    while running.load(Ordering::SeqCst) {
+    while RUNNING.load(Ordering::SeqCst) {
         if let Err(e) = run_cycle(&config, &mut state, &args.state, args.dry_run) {
             log::error!("Cycle error: {}", e);
         }
 
-        // Sleep for the poll interval in small chunks to remain responsive to shutdown
+        // Sleep for the poll interval in small chunks to remain responsive
+        // to shutdown signals.
         let poll_secs = config.schedule.poll_interval_minutes * 60;
         for _ in 0..poll_secs {
-            if !running.load(Ordering::SeqCst) {
+            if !RUNNING.load(Ordering::SeqCst) {
                 break;
             }
             std::thread::sleep(Duration::from_secs(1));
@@ -106,6 +148,16 @@ fn main() -> anyhow::Result<()> {
     }
 
     log::info!("Daemon stopped");
+    let _ = fs::remove_file(&args.pidfile);
+    Ok(())
+}
+
+fn write_pidfile(path: &str) -> anyhow::Result<()> {
+    let pidfile = PathBuf::from(path);
+    if let Some(parent) = pidfile.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&pidfile, format!("{}\n", std::process::id()))?;
     Ok(())
 }
 
@@ -115,38 +167,90 @@ fn run_cycle(
     state_path: &str,
     cli_dry_run: bool,
 ) -> anyhow::Result<()> {
-    let result = conditions::check_all_conditions(
-        config.battery.min_capacity_percent,
-        config.battery.require_charging,
-        config.battery.max_temperature_c,
-        config.screen.min_idle_minutes,
-        config.safety.require_foreground_check,
-    );
+    // Track how long the screen has been off so `min_idle_minutes` is honored.
+    match conditions::screen::screen_state() {
+        Some(false) => {
+            if state.screen_off_since.is_none() {
+                state.screen_off_since = Some(Utc::now().timestamp());
+            }
+        }
+        _ => state.screen_off_since = None,
+    }
+
+    let result = conditions::check_all_conditions(config, state);
 
     let dry_run = cli_dry_run || config.safety.dry_run;
 
     if scheduler::should_run(state.last_run_timestamp, config.schedule.min_interval_hours) {
         if result.all_met {
             log::info!("Conditions met, running maintenance");
-            if let Err(e) = maintenance::run_maintenance(dry_run, config.storage.min_trim_len_mb) {
-                log::error!("Maintenance failed: {}", e);
-                state.last_run_result = format!("failed: {}", e);
-            } else {
-                log::info!("Maintenance successful");
-                state.last_run_result = "success".to_string();
-                state.last_run_timestamp = Utc::now().timestamp();
-                state.run_count += 1;
+            match maintenance::run_maintenance(dry_run, &config.storage) {
+                Ok(trimmed) => {
+                    log::info!("Maintenance successful ({} bytes trimmed)", trimmed);
+                    state.last_run_result = "success".to_string();
+                    state.last_trimmed_bytes = trimmed;
+                    state.last_run_timestamp = Utc::now().timestamp();
+                    state.run_count += 1;
+                }
+                Err(e) => {
+                    log::error!("Maintenance failed: {}", e);
+                    state.last_run_result = format!("failed: {}", e);
+                }
             }
         } else {
-            // Un-comment if you want to log every skipped poll, but it can be spammy
-            // log::debug!("Conditions not met, skipping maintenance: {:?}", result);
+            log::debug!(
+                "Conditions not met, skipping maintenance: battery={} screen={} idle={} foreground={}",
+                result.battery_ok,
+                result.screen_ok,
+                result.idle_ok,
+                result.foreground_ok
+            );
             state.last_run_result = "skipped_conditions_not_met".to_string();
         }
     } else {
-        // log::debug!("Minimum interval not elapsed, skipping maintenance");
+        log::debug!("Minimum interval not elapsed, skipping maintenance");
         state.last_run_result = "skipped_interval_not_elapsed".to_string();
     }
 
     state.save(state_path)?;
     Ok(())
+}
+
+#[derive(serde::Serialize)]
+struct StatusOutput {
+    environment: env_detect::Environment,
+    storage: Vec<storage::StorageInfo>,
+    state: state::AppState,
+    conditions: conditions::ConditionsResult,
+    running: bool,
+    pid: Option<u32>,
+}
+
+fn print_status(config: &config::Config, state: &state::AppState) -> anyhow::Result<()> {
+    let output = StatusOutput {
+        environment: state.detected_environment.clone().unwrap_or_default(),
+        storage: storage::detect_storage(),
+        state: state.clone(),
+        conditions: conditions::check_all_conditions(config, state),
+        running: daemon_running(),
+        pid: read_daemon_pid(),
+    };
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
+fn daemon_running() -> bool {
+    let Some(pid) = read_daemon_pid() else {
+        return false;
+    };
+    let path = format!("/proc/{}/cmdline", pid);
+    fs::read_to_string(path)
+        .map(|c| c.contains("storagerefresh-rust"))
+        .unwrap_or(false)
+}
+
+fn read_daemon_pid() -> Option<u32> {
+    fs::read_to_string("/data/adb/storagerefresh/daemon.pid")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
 }

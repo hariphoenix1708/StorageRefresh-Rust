@@ -1,9 +1,8 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::process::Command;
 
-#[derive(Debug, Serialize, Clone, Default)]
-#[derive(Deserialize)]
+#[derive(Debug, Serialize, Clone, Default, Deserialize)]
 pub struct Environment {
     pub android_version: String,
     pub android_sdk: String,
@@ -11,8 +10,7 @@ pub struct Environment {
     pub root_type: RootType,
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq, Default)]
-#[derive(Deserialize)]
+#[derive(Debug, Serialize, Clone, PartialEq, Default, Deserialize)]
 pub enum RootType {
     Magisk,
     KernelSU,
@@ -30,10 +28,7 @@ pub fn detect_environment() -> Environment {
 }
 
 fn get_prop(prop_name: &str) -> String {
-    let output = Command::new("getprop")
-        .arg(prop_name)
-        .output()
-        .ok();
+    let output = Command::new("getprop").arg(prop_name).output().ok();
 
     if let Some(out) = output {
         if out.status.success() {
