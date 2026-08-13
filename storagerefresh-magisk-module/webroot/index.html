@@ -221,9 +221,9 @@ async function loadStatus() {
   // Last run
   const s = data.state || {};
   const resultBadge =
+    s.last_run_result == null || s.last_run_result === "never_run" ? badge(false, "Never run") :
     s.last_run_result === "success" ? badge(true, "Success") :
-    s.last_run_result === "never_run" ? badge(false, "Never run") :
-    s.last_run_result && s.last_run_result.startsWith("skipped") ? badge(false, "Skipped") :
+    s.last_run_result.startsWith("skipped") ? badge(false, "Skipped") :
     badge(false, "Failed");
   document.getElementById("lastRun").innerHTML =
     '<div class="row"><span class="k">Result</span>' + resultBadge + "</div>" +

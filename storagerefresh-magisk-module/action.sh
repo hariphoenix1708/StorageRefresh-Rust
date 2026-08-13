@@ -26,15 +26,8 @@ if [ ! -f "$DATADIR/config.toml" ]; then
   fi
 fi
 
-# If the daemon is already running and this is not a forced run, don't run a
-# second cycle concurrently; just report current status instead.
-if [ "$FORCE" != "force" ] && pgrep -f "storagerefresh-rust --config" >/dev/null 2>&1; then
-  "$BIN" --status --config "$DATADIR/config.toml" --state "$DATADIR/state.json" > "$RESULT" 2>&1
-  echo "Daemon is running; showing current status (see WebUI)."
-  exit 0
-fi
-
-# Run one maintenance cycle synchronously so the Action result reflects it.
+# An explicit user request always runs one cycle. Running `--once` alongside the
+# daemon is safe (state is saved atomically; FITRIM is idempotent).
 EXTRA=""
 if [ "$FORCE" = "force" ]; then
   EXTRA="--force"
