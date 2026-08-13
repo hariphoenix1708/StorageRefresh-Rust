@@ -32,6 +32,12 @@ struct Args {
     #[arg(long, help = "Run one maintenance cycle and exit")]
     once: bool,
 
+    #[arg(
+        long,
+        help = "Run immediately, ignoring conditions and interval (with --once)"
+    )]
+    force: bool,
+
     #[arg(long, help = "Dry run mode (overrides config)")]
     dry_run: bool,
 
@@ -118,7 +124,7 @@ fn main() -> anyhow::Result<()> {
 
     if args.once {
         log::info!("Running in --once mode");
-        run_cycle(&config, &mut state, &args.state, args.dry_run)?;
+        run_cycle(&config, &mut state, &args.state, args.dry_run, args.force)?;
         print_status(&config, &state)?;
         return Ok(());
     }
@@ -132,7 +138,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     while RUNNING.load(Ordering::SeqCst) {
-        if let Err(e) = run_cycle(&config, &mut state, &args.state, args.dry_run) {
+        if let Err(e) = run_cycle(&config, &mut state, &args.state, args.dry_run, false) {
             log::error!("Cycle error: {}", e);
         }
 
@@ -166,6 +172,7 @@ fn run_cycle(
     state: &mut state::AppState,
     state_path: &str,
     cli_dry_run: bool,
+    force: bool,
 ) -> anyhow::Result<()> {
     // Track how long the screen has been off so `min_idle_minutes` is honored.
     match conditions::screen::screen_state() {
@@ -181,32 +188,36 @@ fn run_cycle(
 
     let dry_run = cli_dry_run || config.safety.dry_run;
 
-    if scheduler::should_run(state.last_run_timestamp, config.schedule.min_interval_hours) {
-        if result.all_met {
-            log::info!("Conditions met, running maintenance");
-            match maintenance::run_maintenance(dry_run, &config.storage) {
-                Ok(trimmed) => {
-                    log::info!("Maintenance successful ({} bytes trimmed)", trimmed);
-                    state.last_run_result = "success".to_string();
-                    state.last_trimmed_bytes = trimmed;
-                    state.last_run_timestamp = Utc::now().timestamp();
-                    state.run_count += 1;
-                }
-                Err(e) => {
-                    log::error!("Maintenance failed: {}", e);
-                    state.last_run_result = format!("failed: {}", e);
-                }
+    // Decide whether a cycle is due, before updating the timestamp below.
+    let due = scheduler::should_run(state.last_run_timestamp, config.schedule.min_interval_hours);
+
+    // Always record the attempt time so the WebUI's "Last run" stays populated
+    // even when a cycle is skipped.
+    state.last_run_timestamp = Utc::now().timestamp();
+
+    if force || (due && result.all_met) {
+        log::info!(
+            "Running maintenance{}",
+            if force { " (forced)" } else { "" }
+        );
+        match maintenance::run_maintenance(dry_run, &config.storage) {
+            Ok(trimmed) => {
+                log::info!("Maintenance successful ({} bytes trimmed)", trimmed);
+                state.last_run_result = "success".to_string();
+                state.last_trimmed_bytes = trimmed;
+                state.run_count += 1;
             }
-        } else {
-            log::debug!(
-                "Conditions not met, skipping maintenance: battery={} screen={} idle={} foreground={}",
-                result.battery_ok,
-                result.screen_ok,
-                result.idle_ok,
-                result.foreground_ok
-            );
-            state.last_run_result = "skipped_conditions_not_met".to_string();
+            Err(e) => {
+                log::error!("Maintenance failed: {}", e);
+                state.last_run_result = format!("failed: {}", e);
+            }
         }
+    } else if !result.all_met {
+        log::debug!(
+            "Conditions not met, skipping maintenance: {}",
+            result.reason
+        );
+        state.last_run_result = "skipped_conditions_not_met".to_string();
     } else {
         log::debug!("Minimum interval not elapsed, skipping maintenance");
         state.last_run_result = "skipped_interval_not_elapsed".to_string();

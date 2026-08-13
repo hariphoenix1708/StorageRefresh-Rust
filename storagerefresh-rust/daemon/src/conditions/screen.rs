@@ -37,14 +37,6 @@ pub fn screen_pass(
     screen_off_elapsed(screen_off_since).is_some_and(|elapsed| elapsed >= min_secs)
 }
 
-pub fn check_screen(min_idle_minutes: u64, screen_off_since: Option<i64>) -> bool {
-    screen_pass(
-        screen_state() == Some(false),
-        min_idle_minutes,
-        screen_off_since,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

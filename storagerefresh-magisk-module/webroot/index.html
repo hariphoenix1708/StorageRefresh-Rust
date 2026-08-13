@@ -89,6 +89,7 @@
 
   <div class="actions">
     <button id="runBtn" onclick="runNow()">Run now</button>
+    <button class="secondary" id="forceBtn" onclick="forceNow()">Force run</button>
     <button class="secondary" onclick="refreshAll()">Refresh</button>
   </div>
 
@@ -210,6 +211,12 @@ async function loadStatus() {
   met.className = "row";
   met.innerHTML = '<span class="k">Overall</span>' + badge(c.all_met, "Ready", "Not ready");
   conds.appendChild(met);
+  if (!c.all_met && c.reason) {
+    const why = document.createElement("div");
+    why.className = "row";
+    why.innerHTML = '<span class="k">Why blocked</span><span style="text-align:right;color:var(--warn);font-size:12px">' + c.reason + "</span>";
+    conds.appendChild(why);
+  }
 
   // Last run
   const s = data.state || {};
@@ -253,6 +260,18 @@ async function runNow() {
   btn.disabled = false;
   btn.textContent = "Run now";
   toast(res.errno === 0 ? "Maintenance finished" : "Maintenance failed (exit " + res.errno + ")");
+  await refreshAll();
+}
+
+async function forceNow() {
+  const btn = document.getElementById("forceBtn");
+  btn.disabled = true;
+  btn.textContent = "Forcing…";
+  showError("");
+  const res = await ksuExec("sh " + MODDIR + "/action.sh force");
+  btn.disabled = false;
+  btn.textContent = "Force run";
+  toast(res.errno === 0 ? "Forced maintenance finished" : "Forced maintenance failed (exit " + res.errno + ")");
   await refreshAll();
 }
 

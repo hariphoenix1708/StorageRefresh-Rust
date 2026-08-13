@@ -23,19 +23,43 @@ pub fn battery_pass(capacity: u8, is_charging: bool, temp_c: f32, config: &Batte
     true
 }
 
-pub fn check_battery(config: &BatteryConfig) -> bool {
+/// Reads the battery via sysfs and returns whether maintenance is safe, plus a
+/// human-readable reason when it is not. Fails safe: unreadable/unparseable
+/// values push toward skipping.
+pub fn check_battery(config: &BatteryConfig) -> (bool, String) {
     let capacity_str = read_sysfs("/sys/class/power_supply/battery/capacity").unwrap_or_default();
     let status_str = read_sysfs("/sys/class/power_supply/battery/status").unwrap_or_default();
     let temp_str = read_sysfs("/sys/class/power_supply/battery/temp").unwrap_or_default();
 
-    // Fails safe: unreadable/unparseable values push toward skipping.
     let capacity: u8 = capacity_str.trim().parse().unwrap_or(0);
     let temp_tenths: i32 = temp_str.trim().parse().unwrap_or(9999);
     let temp_c = temp_tenths as f32 / 10.0;
 
     let is_charging = status_str.trim() == "Charging" || status_str.trim() == "Full";
 
-    battery_pass(capacity, is_charging, temp_c, config)
+    let pass = battery_pass(capacity, is_charging, temp_c, config);
+    let reason = if pass {
+        String::new()
+    } else if capacity < config.min_capacity_percent {
+        format!(
+            "battery {}% < minimum {}%",
+            capacity, config.min_capacity_percent
+        )
+    } else if config.require_charging
+        && !is_charging
+        && capacity < config.charging_override_capacity
+    {
+        format!(
+            "not charging, battery {}% < override {}%",
+            capacity, config.charging_override_capacity
+        )
+    } else if temp_c > config.max_temperature_c {
+        format!("battery {:.1}C > max {}C", temp_c, config.max_temperature_c)
+    } else {
+        "battery state unknown".to_string()
+    };
+
+    (pass, reason)
 }
 
 fn read_sysfs<P: AsRef<Path>>(path: P) -> Option<String> {
